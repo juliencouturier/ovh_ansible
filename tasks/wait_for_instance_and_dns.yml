@@ -1,0 +1,28 @@
+# Wait for instance to be active
+- name: "Wait for instance {{ my_instance }}"
+  ovh_cloud_instance:
+    name: "{{ my_instance }}"
+    cloud_name: "{{ cloud.name }}"
+    state: status
+    endpoint: "{{ ovh.endpoint|default('ovh-eu') }}"
+    application_key: '{{ ovh.applicationkey }}'
+    application_secret: '{{ ovh.application_secret }}'
+    consumer_key: '{{ ovh.consumer_key }}'         
+  register: instance_status
+  until: instance_status.instance.status == 'ACTIVE'
+  retries: 200
+  delay: 5
+
+- name: "Creation de l'alias DNS pour {{ my_instance }} ({{ instance_status|json_query(public_ip_query) }})"
+  ovh_dns:
+    state: present
+    domain: "{{ ovh.domain }}"
+    name: "{{ my_instance|regex_replace('^((.+)(\\.))([^\\.]+)\\.([^\\.]+)$', '\\2') }}"
+    type: A
+    value: "{{ instance_status|json_query(public_ip_query) }}"
+    endpoint: "{{ ovh.endpoint|default('ovh-eu') }}"
+    application_key: '{{ ovh.applicationkey }}'
+    application_secret: '{{ ovh.application_secret }}'
+    consumer_key: '{{ ovh.consumer_key }}'    
+  vars:
+    public_ip_query: "instance.ipAddresses[?type=='public'&&version==`4`]|[0].ip"

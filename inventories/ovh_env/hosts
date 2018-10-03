@@ -1,0 +1,45 @@
+[supervision-webservers]
+web-1.mydomain.fr
+
+[worker]
+web-1.mydomain.fr nb_worker=3
+
+[supervision-beat]
+web-1.mydomain.fr
+
+[supervision-app:children]
+supervision-webservers
+supervision-worker
+supervision-beat
+
+[supervision-vpn]
+web-1.mydomain.fr
+
+[supervision-bdd]
+db-1.mydomain.fr
+
+[supervision-es]
+es-1.mydomain.fr node_name=node-1 elastic_mem=5G
+es-2.mydomain.fr node_name=node-2 elastic_mem=6G
+
+[supervision-collectors]
+web-1.mydomain.fr
+
+[supervision-brokers]
+db-1.mydomain.fr
+
+[supervision-brokers:vars]
+rabbitmq_cluster_master=db-1.mydomain.fr
+rabbitmq_cluster_group=supervision-brokers
+
+[supervision-kibana]
+kibana-1.mydomain.fr
+
+[supervision-apm]
+es-1.mydomain.fr
+
+[publicweb-web]
+publicweb-1.mydomain.fr
+
+[publicweb-bdd]
+db-1.mydomain.fr

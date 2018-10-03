@@ -1,0 +1,23 @@
+cloud:
+  name: My_Cloud
+  private_network:
+    name: My_Network
+    regions:
+    - SBG3
+    vlanid: 54
+    subnets:
+      - region: SBG3
+        dhcp: false
+        network: 192.168.54.0/24
+        start: 192.168.54.50
+        end: 192.168.54.90
+        noGateway: true
+  vracks:
+  - description: Vrack for demo
+    name: MyVrack
+ovh:
+  application_secret: MyAppSecret
+  applicationkey: MyAppKey
+  consumer_key: MyConsomerKey
+  domain: mydomain.fr
+  

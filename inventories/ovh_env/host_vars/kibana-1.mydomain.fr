@@ -1,0 +1,3 @@
+image: Debian 8
+flavor: s1-2
+region: SBG3

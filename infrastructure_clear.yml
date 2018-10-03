@@ -1,0 +1,59 @@
+- hosts: localhost
+  gather_facts: no
+  become: no
+  tasks:
+    - name: Check cloud exists
+      ovh_cloud:
+        name: "{{ cloud.name }}"
+        state: present
+        endpoint: "{{ ovh.endpoint|default('ovh-eu') }}"
+        application_key: '{{ ovh.applicationkey }}'
+        application_secret: '{{ ovh.application_secret }}'
+        consumer_key: '{{ ovh.consumer_key }}'               
+
+    - name: "Get instances IP"
+      ovh_cloud_instance:
+        name: "{{ item }}"
+        cloud_name: "{{ cloud.name }}"
+        state: status
+        endpoint: "{{ ovh.endpoint|default('ovh-eu') }}"
+        application_key: '{{ ovh.applicationkey }}'
+        application_secret: '{{ ovh.application_secret }}'
+        consumer_key: '{{ ovh.consumer_key }}'         
+      register: instance_status
+      with_items: 
+        - "{{ groups['all'] }}"      
+
+    - name: "Delete DNS for {{ item.item }} ({{ item|json_query(public_ip_query) }})"
+      ovh_dns:
+        state: absent 
+        domain: "{{ ovh.domain }}"
+        name: "{{ item.item|regex_replace('^((.+)(\\.))([^\\.]+)\\.([^\\.]+)$', '\\2') }}"
+        type: A
+        value: "{{ item|json_query(public_ip_query) }}"
+        endpoint: "{{ ovh.endpoint|default('ovh-eu') }}"
+        application_key: '{{ ovh.applicationkey }}'
+        application_secret: '{{ ovh.application_secret }}'
+        consumer_key: '{{ ovh.consumer_key }}'    
+      with_items: 
+        - "{{ instance_status.results }}"           
+      vars:
+        public_ip_query: "instance.ipAddresses[?type=='public'&&version==`4`]|[0].ip"
+
+
+    - name: "Clear instance {{ item }}"
+      ovh_cloud_instance:
+        name: "{{ item }}"
+        cloud_name: "{{ cloud.name }}"
+        state: absent
+        endpoint: "{{ ovh.endpoint|default('ovh-eu') }}"
+        application_key: '{{ ovh.applicationkey }}'
+        application_secret: '{{ ovh.application_secret }}'
+        consumer_key: '{{ ovh.consumer_key }}'                
+      with_items: 
+        - "{{ groups['all'] }}"
+
+    - name: Clear saved public ssh keys
+      shell: "ssh-keygen -R {{ item }}"
+      with_items: 
+        - "{{ groups['all'] }}"

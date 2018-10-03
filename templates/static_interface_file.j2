@@ -1,0 +1,8 @@
+auto {{ interface }}
+allow-hotplug {{ interface }}
+iface {{ interface }} inet static
+    address {{ adress }}
+    netmask {{ netmask|default('255.255.255.0') }}
+{% if gateway is defined %}
+    gateway {{ gateway }}
+{% endif %}

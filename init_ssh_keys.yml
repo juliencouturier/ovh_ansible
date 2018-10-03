@@ -1,0 +1,19 @@
+- hosts: localhost
+  gather_facts: no
+  become: no
+  tasks:
+    - name: Check host name availability
+      shell: "ssh-keygen -F {{ hostvars[item]['inventory_hostname'] }}"
+      with_items: 
+        - "{{ groups['all'] }}"
+      register: ssh_known_host_results
+      ignore_errors: yes
+    
+    # - debug:
+    #     msg: "Restultat de la verification {{ item }}"
+    #   with_items: "{{ ssh_known_host_results.results }}"
+
+    - name: Scan the public key
+      shell: "ssh-keyscan -H {{ hostvars[item.item]['inventory_hostname'] }} >> ~/.ssh/known_hosts"
+      with_items: "{{ ssh_known_host_results.results }}"
+      when: item.failed      

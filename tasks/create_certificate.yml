@@ -1,0 +1,141 @@
+# Variables nécessaires pour les tâches : 
+#  - environement : environement sur lequel générer le certificat
+#  - cert_name : Nom du certificat
+#  - url : url pour laquelle on génère le certificat
+#  - country (optionel) : Pays pour le certificat
+#  - organization (optionel) : Organisation pour le certificat
+#  - email (optionel) : email pour le certificat
+#  - subject_alt_name (optionel) : YAML List ou comma separated string des url secondaire ('DNS:www.ansible.com,DNS:m.ansible.com')
+#  - extended_key_usage (optionel) : YAML List ou comma separated string des utilisations de la clé (client authentication, server authentication)
+#  - key_usage (optionel) : YAML List ou comma separated string des utilisations de la clé (e.g. encipherment, signature, certificate signing)
+#  - organizational_unit (optionel) : Unité de l'organisation pour le certificat
+#  - province (optionel) : province pour le certificat
+#  - passphrase (optional) : key passphrase
+#  - ovh :
+#    - endpoint (optionel) : endpoint à appeler
+#    - applicationkey : Clé d'application
+#    - application_secret : 
+#    - consumer_key : 
+#    - domain
+
+# if no url is provided we create certificate for the host FQDN
+- set_fact:
+    url: "{{ ansible_fqdn }}"
+  when: url is undefined
+
+# Extraction of domain from url
+- set_fact:
+    domain: "{{ url|regex_replace('^((.+)(\\.))([^\\.]+)\\.([^\\.]+)$', '\\4.\\5') }}"
+
+    
+- name: create private key
+  openssl_privatekey:
+     path: "{{ url }}.key"
+     size: 2048
+     passphrase: "{{ passphrase|default(omit) }}"
+  delegate_to: 127.0.0.1
+
+
+- name: "Create CSR for {{ url }}"
+  openssl_csr:
+    path: "{{ url }}.csr"
+    privatekey_path: "{{ url }}.key"
+    common_name: "{{ url }}"
+    country_name: "{{ country|default('FR') }}"
+    organization_name: "{{ organization|default('KDG')}}"
+    email_address: "{{ email|default(omit)}}"
+    subject_alt_name: "{{ subject_alt_name|default(omit) }}"
+    extended_key_usage: "{{ extended_key_usage|default(omit) }}"
+    key_usage: "{{ key_usage|default(omit) }}"
+    privatekey_passphrase: "{{ passphrase|default(omit) }}"
+    organizational_unit_name: "{{ organizational_unit|default(omit) }}"
+    state_or_province_name: "{{ province|default(omit) }}"
+  delegate_to: 127.0.0.1
+
+- name: create letsencrypt_key
+  openssl_privatekey:
+    path: "letsencrypt.key"
+    size: 2048
+    type: RSA
+  delegate_to: 127.0.0.1
+
+- name: Ask for a DNS challenge
+  letsencrypt:
+    account_key: "letsencrypt.key"
+    csr: "{{ url }}.csr"
+    fullchain_dest: "{{ url }}.crt"
+    agreement: 'https://letsencrypt.org/documents/LE-SA-v1.2-November-15-2017.pdf'
+    acme_directory: 'https://acme-v01.api.letsencrypt.org/directory'
+  register: cert_challenge
+  delegate_to: 127.0.0.1
+
+- debug:
+    msg: "Challenge to realize : {{ cert_challenge }}"  
+
+# We realize the challend only if needed
+- block:
+  - name: Create TXT DNS to realize the challenge
+    vars:
+      challenge_fqdn: "{{ item.value['dns-01']['resource'] }}.{{ item.key }}"
+    ovh_dns:
+      state: present
+      domain: "{{ domain }}"
+      name: "{{ challenge_fqdn|regex_replace('^((.+)(\\.))([^\\.]+)\\.([^\\.]+)$', '\\2') }}"
+      type: TXT
+      value: "{{ item.value['dns-01']['resource_value'] }}"
+      ttl: 3600
+      endpoint: "{{ ovh.endpoint|default('ovh-eu') }}"
+      application_key: '{{ ovh.applicationkey }}'
+      application_secret: '{{ ovh.application_secret }}'
+      consumer_key: '{{ ovh.consumer_key }}'
+    with_dict: "{{ cert_challenge['challenge_data'] }}"
+    delegate_to: 127.0.0.1
+
+  - pause:
+      seconds: 5
+
+  - name: Validation du challenge et création du certificat
+    letsencrypt:
+      account_key: "letsencrypt.key"
+      csr: "{{ url }}.csr"
+      fullchain_dest: "{{ url }}.crt"
+      agreement: 'https://letsencrypt.org/documents/LE-SA-v1.2-November-15-2017.pdf'
+      acme_directory: 'https://acme-v01.api.letsencrypt.org/directory'
+      challenge: dns-01
+      data: "{{ cert_challenge }}"
+    delegate_to: 127.0.0.1
+    ignore_errors: yes
+    register: cert_challenge_valid
+    until: cert_challenge_valid is succeeded
+    retries: 3
+    delay: 5
+
+  - name: Clear TXT DNS created for the challenge
+    ovh_dns:
+      state: absent
+      domain: "{{ domain }}"
+      name: "{{ item.value['dns-01']['resource'] }}.{{ item.key|regex_replace('^(.+)\\.([^\\.]+)\\.([^\\.]+)$', '\\1') }}"
+      value: "{{ item.value['dns-01']['resource_value'] }}"
+      type: TXT
+      ttl: 3600
+      endpoint: "{{ ovh.endpoint|default('ovh-eu') }}"
+      application_key: '{{ ovh.applicationkey }}'
+      application_secret: '{{ ovh.application_secret }}'
+      consumer_key: '{{ ovh.consumer_key }}'
+    with_dict: "{{ cert_challenge['challenge_data'] }}"      
+    delegate_to: 127.0.0.1
+
+  - name: Fail if challenge failed
+    fail:
+      msg: "Challenge failed : {{ cert_challenge_valid }}"
+    when: cert_challenge_valid is failed
+
+  - name: Add Lets encrypt Root cert
+    lineinfile:
+        path: "{{ url }}.crt" # required. The file to modify.,Before 2.3 this option was only usable as I(dest), I(destfile) and I(name).
+        insertafter: EOF # not required. choices: EOF;*regex*. Used with C(state=present). If specified, the line will be inserted after the last match of specified regular expression. If the first match is required, use(firstmatch=yes). A special value is available; C(EOF) for inserting the line at the end of the file. If specified regular expression has no matches, EOF will be used instead. May not be used with C(backrefs).
+        line: "{{ lookup('file', 'files/DSTRootCAX3.crt')}}" # not required. Required for C(state=present). The line to insert/replace into the file. If C(backrefs) is set, may contain backreferences that will get expanded with the C(regexp) capture groups if the regexp matches.:
+    when: cert_challenge_valid is succeeded
+    delegate_to: 127.0.0.1
+
+  when: cert_challenge is changed

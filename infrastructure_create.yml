@@ -1,0 +1,149 @@
+- hosts: localhost
+  gather_facts: no
+  tasks:
+    - name: Check cloud exists
+      ovh_cloud:
+        name: "{{ cloud.name }}"
+        state: present
+        endpoint: "{{ ovh.endpoint|default('ovh-eu') }}"
+        application_key: '{{ ovh.applicationkey }}'
+        application_secret: '{{ ovh.application_secret }}'
+        consumer_key: '{{ ovh.consumer_key }}'      
+
+    - name: Check vrack attached
+      ovh_vrack:
+        name: "{{ item.name }}"
+        state: attached
+        cloud: "{{ cloud.name }}"
+        endpoint: "{{ ovh.endpoint|default('ovh-eu') }}"
+        application_key: '{{ ovh.applicationkey }}'
+        application_secret: '{{ ovh.application_secret }}'
+        consumer_key: '{{ ovh.consumer_key }}'          
+      with_items:
+        - "{{ cloud.vracks|default([]) }}"
+        
+    - name: My SSH Key exists
+      ovh_cloud_ssh_keys:
+        name: MyKey
+        cloud_name: "{{ cloud.name }}"
+        state: present
+        publicKey: "{{ lookup('file', '~/.ssh/id_rsa.pub') }}"
+        endpoint: "{{ ovh.endpoint|default('ovh-eu') }}"
+        application_key: '{{ ovh.applicationkey }}'
+        application_secret: '{{ ovh.application_secret }}'
+        consumer_key: '{{ ovh.consumer_key }}'           
+
+    # Loop over host to create them
+    - name: "Create instances"
+      ovh_cloud_instance:
+        name: "{{ item }}"
+        cloud_name: "{{ cloud.name }}"
+        flavor: "{{ hostvars[item]['flavor'] }}"
+        image: "{{ hostvars[item]['image'] }}"
+        sshKey: MyKey
+        region: "{{ hostvars[item]['region'] }}"
+        state: present
+        endpoint: "{{ ovh.endpoint|default('ovh-eu') }}"
+        application_key: '{{ ovh.applicationkey }}'
+        application_secret: '{{ ovh.application_secret }}'
+        consumer_key: '{{ ovh.consumer_key }}'                
+      with_items: 
+        - "{{ groups['all'] }}"
+
+    - name: Create private network
+      ovh_cloud_network:
+        name: "{{ cloud.private_network.name }}"
+        vlanid: "{{ cloud.private_network.vlanid }}"
+        cloud_name: "{{ cloud.name }}"
+        regions: "{{ cloud.private_network.regions }}"
+        subnets: "{{ cloud.private_network.subnets }}"
+        endpoint: "{{ ovh.endpoint|default('ovh-eu') }}"
+        application_key: '{{ ovh.applicationkey }}'
+        application_secret: '{{ ovh.application_secret }}'
+        consumer_key: '{{ ovh.consumer_key }}'        
+      when: cloud.private_network is defined
+    
+    # Loop over host to wait their creation and create their DNS 
+    - include_tasks: 'tasks/wait_for_instance_and_dns.yml'
+      with_items: 
+        - "{{ groups['all'] }}"        
+      loop_control:
+        loop_var: my_instance
+
+    # We wait for hosts availability
+    - name: Wait for host to start
+      wait_for:
+          state: started
+          port: 22 # not required. Port number to poll.
+          sleep: 5 # not required. Number of seconds to sleep between checks, before 2.3 this was hardcoded to 1 second.
+          connect_timeout: 15 # not required. Maximum number of seconds to wait for a connection to happen before closing and retrying.
+          host: "{{ item }}"
+          search_regex: (OpenSSH)|(login)
+          timeout: 300 # not required. Maximum number of seconds to wait for, when used with another condition it will force an error.,When used without other conditions it is equivalent of just sleeping.
+      with_items: 
+        - "{{ groups['all'] }}"           
+
+# We get public ssh keys of new hosts to be able to connect to them through SSH wihtout warnings
+- import_playbook: init_ssh_keys.yml        
+
+# If host have a private network we attach the host to the network
+- hosts: localhost
+  gather_facts: no
+  tasks:
+    - name: Create private network
+      ovh_cloud_network:
+        name: "{{ cloud.private_network.name }}"
+        vlanid: "{{ cloud.private_network.vlanid }}"
+        cloud_name: "{{ cloud.name }}"
+        state: attached
+        instance: "{{ item }}"
+        instance_ip: "{{ hostvars[item]['backoffice_ip'] }}"
+        endpoint: "{{ ovh.endpoint|default('ovh-eu') }}"
+        application_key: '{{ ovh.applicationkey }}'
+        application_secret: '{{ ovh.application_secret }}'
+        consumer_key: '{{ ovh.consumer_key }}'         
+      with_items: 
+        - "{{ groups['all'] }}"    
+      when: hostvars[item].backoffice_ip is defined 
+
+# Enable new network interface at startutp
+- hosts: all
+  remote_user: debian
+  tasks:
+    - block:
+      - name: Enable conf files from interfaces.d folder
+        lineinfile:
+            path: /etc/network/interfaces
+            state: present
+            insertafter: EOF
+            line: source /etc/network/interfaces.d/*
+        become: true
+
+
+      - name: Create /etc/network/interfaces.d
+        file:
+            path: /etc/network/interfaces.d
+            state: directory
+        become: true        
+
+      - name: Add new interface definition
+        vars:
+          interface: eth1
+          adress: "{{backoffice_ip}}"
+        template:
+            dest: /etc/network/interfaces.d/eth1
+            src: templates/static_interface_file.j2
+        become: true
+        register: interface_changed
+
+      - name: Enable eth1
+        shell: 'ip l s eth1 up'
+        when: interface_changed is changed
+        become: true
+
+      - name: Set IP Address
+        shell: "ip addr add {{ backoffice_ip }}/24 dev eth1"
+        when: interface_changed is changed
+        become: true        
+                      
+      when: backoffice_ip is defined
